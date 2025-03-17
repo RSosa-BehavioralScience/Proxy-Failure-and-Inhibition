@@ -2,6 +2,14 @@
 # GOAL ATTAINMENT DEVOID OF ANY GOAL TRACE
 #-----------------------------------------------------------------------------
 
+# Description:
+#   This script simulates the random movement of an agent within a two-dimensional
+#   environment. Starting from a specified initial position, the agent reaches
+#   a predefined goal solely via random displacement, without any external
+#   cues or directional guidance.
+
+###############################################################################
+
 #Setup and Package Loading ----
 if (!require('ggplot2')) install.packages('ggplot2'); library('ggplot2')
 if (!require('dplyr')) install.packages('dplyr'); library('dplyr')
@@ -93,24 +101,30 @@ for (i in 1:loops) {
     collision = logical(),     #Boundary collision flag
     true_length = numeric(),   #Actual step length after bouncing (if any)
     true_angle = numeric(),    #Actual movement angle after bouncing (if any)
-    true_angle_r = numeric()  #Relative true angle
+    true_angle_r = numeric()   #Relative true angle
   )
   
   #Initialize position tracking
   previous_x <- current_x
   previous_y <- current_y
   
+  #Set step counter to zero
+  k <- 0
+  
   #Displacement Loop: Continue until goal is reached
   while (!path_cross_goal(previous_x, previous_y, current_x, current_y, goal_x, goal_y, goal_radius)) {
+    #Add a unity to the step counter
+    k <- k + 1
+    
     #Update position tracking
     previous_x <- current_x
     previous_y <- current_y
     
-    #Update movement angle based on gain and affective state
+    #Update movement angle by selecting a random displacement between 0° and 360°
     angle <- angle + runif(1, -pi, pi)
     
-    #Calculate step length based on information gain
-    length <- initial_step_length #+ log10(initial_step_length+(gain_f/0.1))
+    #Set step length as a constant
+    length <- initial_step_length 
     
     #Calculate next position
     next_x <- current_x + length * cos(angle)
@@ -163,36 +177,38 @@ for (i in 1:loops) {
       acos(cos(angle))
     }
     
-    #Record current step data
-    new_step <- tibble(
-      step = nrow(steps) + 1,
-      x = current_x,
-      y = current_y,
-      length = length,
-      abs_angle = bound_angle * (180 / pi),
-      rel_angle = ifelse(nrow(steps) > 0, 
-                         bound_angle * (180 / pi) - steps$abs_angle[nrow(steps)], 
-                         NA),
-      collision = collision,
-      true_length = true_length,
-      true_angle = true_angle_ * (180 / pi),
-      true_angle_r = ifelse(nrow(steps) > 0, 
-                            (true_angle_ * (180 / pi)) - steps$true_angle[nrow(steps)], 
-                            NA)
-    )
-    
-    #Update step record
-    steps <- bind_rows(steps, new_step)
+    if (i == loops){
+      #Record step data in the last loop
+      new_step <- tibble(
+        step = nrow(steps) + 1,
+        x = current_x,
+        y = current_y,
+        length = length,
+        abs_angle = bound_angle * (180 / pi),
+        rel_angle = ifelse(nrow(steps) > 0, 
+                           bound_angle * (180 / pi) - steps$abs_angle[nrow(steps)], 
+                           NA),
+        collision = collision,
+        true_length = true_length,
+        true_angle = true_angle_ * (180 / pi),
+        true_angle_r = ifelse(nrow(steps) > 0, 
+                              (true_angle_ * (180 / pi)) - steps$true_angle[nrow(steps)], 
+                              NA)
+      )
+      
+      #Update step record
+      steps <- bind_rows(steps, new_step)
+    }
     
   }
 
   #Store episode performance metric
-  steps_count_per_iteration[i] <- nrow(steps)
+  steps_count_per_iteration[i] <- k
 }
 
 #Basic inspection of the output
 
-#Visualize the temporal progression of steps per episode, which should be
+#Visualize the temporal progression of steps per episode, which should be 
 #... fairly stationary
 plot(steps_count_per_iteration, type = "l",
      main = "Progression Over Episodes",
@@ -204,7 +220,7 @@ plot(steps_count_per_iteration, type = "l",
 typical_performance <- median(steps_count_per_iteration)
 print(paste("Typical steps per episode:", typical_performance))
 
-#Find an episode that represents typical performance
+#Find an episode that represents typical performance ########################################################
 #We look for the episode with steps count closest to but lower than
 #...the median (507 steps) to illustrate a representative pattern
 representative_episode <- which(steps_count_per_iteration == 
@@ -253,7 +269,7 @@ new_row <- tibble(
   true_angle_r = NA,  
   )
 
-#Combine the new row with existing data
+#Combine the new row with existing data 
 rep_episode_unguided <- bind_rows(new_row, rep_episode_unguided)
 
 #Plot agent displacement path to goal

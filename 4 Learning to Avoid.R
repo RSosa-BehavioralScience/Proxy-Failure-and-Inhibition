@@ -3,11 +3,23 @@
 # ------------------------------------GRADIENT DESCENDING VERSION
 #-----------------------------------------------------------------------------
 
+# Description:
+#   This script employs the same learning rule as the previous script, but 
+#   simulations are conducted in an alternative environment. In this setup, 
+#   cue density does not signal proximity to the goal; rather, a higher cue density 
+#   indicates a greater distance from the goal. As a result, goal attainment 
+#   still becomes more efficient through experience but via an opposed 
+#   feedback mechanism.
+
+#############################################################################
+
 #Setup and Package Loading ----
 if (!require('ggplot2')) install.packages('ggplot2'); library('ggplot2')
 if (!require('dplyr')) install.packages('dplyr'); library('dplyr')
 if (!require('tibble')) install.packages('tibble'); library('tibble')
 if (!require('ggforce')) install.packages('ggforce'); library('ggforce')
+if (!require('patchwork')) install.packages('patchwork'); library('patchwork')
+
 
 #Set language to English for consistent output
 Sys.setenv(LANG = "en")
@@ -103,13 +115,13 @@ point_in_polygon <- function(x, y, polygon) {
 
 #Main Simulation Loop ----
 steps_count_per_iteration <- vector()  #Store steps per episode
-loops <- 400                           #Number of episodes
+loops <- 491                           #Number of episodes
 
 #Learning parameters for cue
-PE <- 0                  #Prediction Error
+PE <- 0                  #Prediction error
 V <- 0                   #Associative value
 f_inc <- 0               #Feedback increment
-lr_cue <- 0.01           #Learning rate for target cue
+lr_cue <- 0.03           #Learning rate for target cue
 
 #Associative value evolution tracking
 V_evol <- c()          #Track associative values for goal associated cue
@@ -128,8 +140,8 @@ num_blobs <- 30
 blob_sizes <- seq(from = 1, to = 12, length.out = 30)
 
 #Position blobs
-blob_x <- rep(boundary_min, num_blobs) #Cues around the goal
-blob_y <- rep(boundary_min, num_blobs)
+blob_x <- rep(-0.5, num_blobs) #Cues radiating from the agent's initial position
+blob_y <- rep(-0.5, num_blobs)
 
 #Progress bar setup
 pb <- txtProgressBar(min = 0,
@@ -170,7 +182,7 @@ for (i in 1:loops) {
     cue_int = numeric(),       #Cue intensity (number of blobs)
     gain_cue = numeric(),      #Change in cue intensity from step i-1
     aff = character(),         #Affective valence (approach/avoid)
-    gain_trans = numeric()       #Total gain (combining different sources of information)
+    gain_trans = numeric()     #Adaptive gain transformed into proportion of angle constraint
   )
   
   #Calculate prediction errors and update associative values via a
@@ -191,6 +203,9 @@ for (i in 1:loops) {
 
   #Initialize vector storing feedback paths
   feedback_path <- c()      #Store cue encounters
+  
+  #Set step counter to zero
+  k <- 0
   
   #Displacement Loop: Continue until goal is reached
   while (!path_cross_goal(previous_x, previous_y, current_x, current_y, goal_x, goal_y, goal_radius)) {
@@ -272,34 +287,38 @@ for (i in 1:loops) {
       acos(cos(angle))
     }
     
-    #Record current step data
-    new_step <- tibble(
-      step = nrow(steps) + 1,
-      x = current_x,
-      y = current_y,
-      length = length,
-      abs_angle = bound_angle * (180 / pi),
-      rel_angle = ifelse(nrow(steps) > 0, 
-                         bound_angle * (180 / pi) - steps$abs_angle[nrow(steps)], 
-                         NA),
-      collision = collision,
-      true_length = true_length,
-      true_angle = true_angle_ * (180 / pi),
-      true_angle_r = ifelse(nrow(steps) > 0, 
-                            (true_angle_ * (180 / pi)) - steps$true_angle[nrow(steps)], 
-                            NA),
-      cue_int = inside_blob_count,
-      gain_cue = gain,
-      aff = case_when(
-        aff == 0 ~ "app",
-        aff == pi ~ "av",
-        TRUE ~ as.character(aff)
-      ),
-      gain_trans = gain_f
-    )
+    #Record current step data (only in the last episode)
+    if (i == loops) {
+      new_step <- tibble(
+        step = nrow(steps) + 1,
+        x = current_x,
+        y = current_y,
+        length = length,
+        abs_angle = bound_angle * (180 / pi),
+        rel_angle = ifelse(nrow(steps) > 0, 
+                           bound_angle * (180 / pi) - steps$abs_angle[nrow(steps)], 
+                           NA),
+        collision = collision,
+        true_length = true_length,
+        true_angle = true_angle_ * (180 / pi),
+        true_angle_r = ifelse(nrow(steps) > 0, 
+                              (true_angle_ * (180 / pi)) - steps$true_angle[nrow(steps)], 
+                              NA),
+        cue_int = inside_blob_count,
+        gain_cue = gain,
+        aff = case_when(
+          aff == 0 ~ "app",
+          aff == pi ~ "av",
+          TRUE ~ as.character(aff)
+        ),
+        gain_trans = gain_f
+      )
+      #Update step record
+      steps <- bind_rows(steps, new_step)
+    }
     
-    #Update step record
-    steps <- bind_rows(steps, new_step)
+    #Add one step to the step counter
+    k <- k + 1
     
     #Update tracking variables for next iteration
     prev_cue <- inside_blob_count
@@ -307,17 +326,25 @@ for (i in 1:loops) {
   
   #Post-episode Processing ----
   
+  #Count the blobs at the agent's last recorded position
+  #This value will be appended to the feedback path to compute gain acceleration
+  inside_blobs_ <- sapply(1:num_blobs, function(i) {
+    point_in_polygon(current_x, current_y, blobs[[i]])
+  })
+  inside_blob_count_ <- sum(inside_blobs_)
+  
   #Calculate cue acceleration
-  gain_acceleration <- diff(c(feedback_path, 0)) #Last encounter has zero blobs
+  gain_acceleration <- diff(c(feedback_path, inside_blob_count_)) 
+  
+  #Ensure all values in gain_acceleration vector are within [-1, 1] by 
+  #dividing by the maximum absolute value
+  gain_acceleration <- gain_acceleration/max(abs(gain_acceleration))
   n <- length(gain_acceleration)
   weights <- rev(0.5 / 2^(0:(n-1)))  #Exponentially decaying weights
   f_inc <- sum(gain_acceleration * weights) / sum(weights)
   
-  #Ensure the value updating factor does not exceed 1 or fall below -1
-  f_inc <- pmin(pmax(f_inc, -1), 1)
-  
   #Store episode performance metric
-  steps_count_per_iteration[i] <- nrow(steps)
+  steps_count_per_iteration[i] <- k
 }
 
 #Adjust the outcome data frame to enhance readability and facilitate inspection
@@ -338,24 +365,35 @@ plot(steps_count_per_iteration, type = "l",
      col = "steelblue")
 
 #Calculate the typical performance metric (EARLY STAGE)
-typical_performance_E <- median(steps_count_per_iteration[1:20])
-print(paste("Typical steps per episode:", typical_performance_E))
+typical_performance_E <- median(steps_count_per_iteration[1:10])
+print(paste("Typical steps per episode (early stage):", typical_performance_E))
 
 #Calculate the typical performance metric (LATE STAGE)
-typical_performance_L <- median(steps_count_per_iteration[381:400])
-print(paste("Typical steps per episode:", typical_performance_L))
+typical_performance_L <- median(steps_count_per_iteration[491:500])
+print(paste("Typical steps per episode (late stage):", typical_performance_L))
 
 #Find an episode that represents typical performance at early and late stages of learning
+#If a value matches the median, select it as representative; otherwise, 
+#...select the smallest/highest value greater/lower than the median
+early_episodes <- steps_count_per_iteration[1:10]
+representative_episode_E <- 
+  which(early_episodes == ifelse(any(early_episodes == typical_performance_E), 
+                                 typical_performance_E, 
+                                 min(early_episodes[early_episodes > typical_performance_E])))
+print(paste("Representative episode number, early stage:", 
+            representative_episode_E, 
+            "| Numer of steps:", 
+            steps_count_per_iteration[representative_episode_E]))
 
-early_episodes <- steps_count_per_iteration[1:40]
-representative_episode_E <- which(early_episodes == 
-                                    min(early_episodes[early_episodes > typical_performance_E]))
-print(paste("Representative episode number, early stage:", representative_episode_E))
-
-late_episodes <- steps_count_per_iteration[381:400]
-representative_episode_L <- which(late_episodes == 
-                                    min(late_episodes[late_episodes > typical_performance_L]))
-print(paste("Representative episode number, early stage:", representative_episode_L+380))
+late_episodes <- steps_count_per_iteration[491:500]
+representative_episode_L <- 
+  which(late_episodes == ifelse(any(late_episodes == typical_performance_L), 
+                                typical_performance_L, 
+                                max(late_episodes[late_episodes < typical_performance_L])))
+print(paste("Representative episode number, late stage:", 
+            representative_episode_L+490,
+            "| Numer of steps:",
+            steps_count_per_iteration[representative_episode_L+490]))
 
 plot(V_evol, 
      main = "Progression of Associative Value Over Episodes", 
@@ -380,7 +418,7 @@ V_evol_descending <- V_evol
 #Early stage
 
 #To generate the trajectory plot shown in Figure 2:
-#Set loops <- 17 to capture the representative episode of early stage
+#Set loops <- 7 to capture the representative episode of early stage
 #Execute until the simulation loop (stopping before the analysis section)
 #Run the command below to store the agent's path
 
@@ -389,7 +427,7 @@ rep_episode_desc_e <- steps
 #Prepare data for plotting
 blob_plot_data <- do.call(rbind, lapply(1:num_blobs, function(i) {
   blob <- blobs[[i]]
-  blob$id <- num_blobs - i + 1  # Reverse the id numbering
+  blob$id <- num_blobs - i + 1  #Reverse the id numbering
   blob
 }))
 
@@ -472,7 +510,7 @@ agent_path_desc_e <- agent_path_desc_e +
 #Late stage
 
 #To generate the trajectory plot shown in Figure 2:
-#Set loops <- 387 to capture the representative episode of early stage
+#Set loops <- 491 to capture the representative episode of early stage
 #Execute until the simulation loop (stopping before the analysis section)
 #Run the command below to store the agent's path
 
@@ -481,7 +519,7 @@ rep_episode_desc_l <- steps
 #Prepare data for plotting
 blob_plot_data <- do.call(rbind, lapply(1:num_blobs, function(i) {
   blob <- blobs[[i]]
-  blob$id <- num_blobs - i + 1  # Reverse the id numbering
+  blob$id <- num_blobs - i + 1  #Reverse the id numbering
   blob
 }))
 
@@ -558,9 +596,7 @@ agent_path_desc_l <- agent_path_desc_l +
 
 #Longitudinal progression of performance and associative value
 
-if (!require('patchwork')) install.packages('patchwork'); library('patchwork')
-
-#Main plot of steps climbing
+#Main plot of steps descending
 sd <- ggplot(data = data.frame(Episodes = seq_along(steps_descending),
                                Steps = steps_descending), 
              aes(x = Episodes, y = Steps)) +
@@ -571,12 +607,18 @@ sd <- ggplot(data = data.frame(Episodes = seq_along(steps_descending),
   theme_minimal() +
   theme(plot.margin = margin(5.5, 40, 5.5, 5.5),
         panel.grid = element_blank(),
-        panel.border = element_rect(color = "black", fill = NA)) 
+        panel.border = element_rect(color = "black", fill = NA),
+        axis.text.x = element_text(size = 13),
+        axis.text.y = element_text(size = 12),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16)    
+)
 
-#Inset plot of V_evol_climbing
+#Inset plot of V_evol_descending
 vd <- ggplot(data = data.frame(Episodes = seq_along(V_evol_descending),
                                Value = V_evol_descending), 
              aes(x = Episodes, y = Value)) +
+  scale_y_continuous(limits = c(-1, 0)) +
   geom_hline(yintercept = 0, color = "black") +
   geom_vline(xintercept = 0, color = "black") +
   geom_point(color = "blue", alpha = 0.1, size = 2.5) +
@@ -584,13 +626,17 @@ vd <- ggplot(data = data.frame(Episodes = seq_along(V_evol_descending),
        y = "Associative Value") +
   theme_minimal(base_size = 8) +
   theme(plot.background = element_rect(fill = "white", color = NA),  
-        panel.grid = element_blank())
+        panel.grid = element_blank(),
+        axis.text.x = element_text(size = 7),    
+        axis.text.y = element_text(size = 8),
+        axis.title.x = element_text(size = 11),   
+        axis.title.y = element_text(size = 11)    
+  )
 
 #Combine plots with inset
 sNv_d <- sd + inset_element(vd, left = 0.65, bottom = 0.6, right = 0.85, top = 0.9)
 
 print(sNv_d)
-
 
 #Ensamble plot to create Figure 2
 
@@ -607,5 +653,6 @@ F2 <- F2_top_row / F2_bottom_row
 
 #Display the combined plot
 print(F2)
+#Recommended dimensions: 2000 × 1000 pixels
 
 #Continue by running script number 5

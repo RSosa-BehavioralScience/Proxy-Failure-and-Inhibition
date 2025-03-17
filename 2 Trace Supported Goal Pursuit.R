@@ -2,6 +2,15 @@
 # GOAL PURSUIT VIA TRACES
 #-----------------------------------------------------------------------------
 
+# Description:
+#   This script extends the previous simulation by incorporating goal traces
+#   that provide directional guidance to the agent. The agent is now equipped 
+#   with a performance rule for adaptive gain, allowing it to pursue trace 
+#   increments detected. In the absence of goal traces, the agent continues to
+#   move randomly.
+
+###############################################################################
+
 #Setup and Package Loading ----
 if (!require('ggplot2')) install.packages('ggplot2'); library('ggplot2')
 if (!require('dplyr')) install.packages('dplyr'); library('dplyr')
@@ -112,7 +121,7 @@ tail_length <- 2         #Visual trail length
 num_blobs <- 30
 blob_sizes <- seq(from = 1, to = 12, length.out = 30)
 
-#Position blobs
+#Position of blobs
 blob_x <- rep(goal_x, num_blobs) #Cues around the goal
 blob_y <- rep(goal_y, num_blobs)
 
@@ -157,7 +166,7 @@ for (i in 1:loops) {
     true_length = numeric(),   #Actual step length after bouncing (if any)
     true_angle = numeric(),    #Actual movement angle after bouncing (if any)
     true_angle_r = numeric(),  #Relative true angle
-    trace = numeric(),     #Proxy cue intensity (number of goal-related blobs)
+    trace = numeric(),     #Goal trace intensity (number of goal-related blobs)
     gain_trace = numeric(),
     aff = character(),         #Affective valence (approach/avoid)
     gain_trans = numeric()     #Adaptive gain transformed into proportion of angle constraint
@@ -167,24 +176,30 @@ for (i in 1:loops) {
   previous_x <- current_x
   previous_y <- current_y
   
+  #Set step counter to zero
+  k <- 0
+  
   #Displacement Loop: Continue until goal is reached
   while (!path_cross_goal(previous_x, previous_y, current_x, current_y, goal_x, goal_y, goal_radius)) {
+    #Add a unity to step counter
+    k <- k + 1
+    
     #Update position tracking
     previous_x <- current_x
     previous_y <- current_y
     
-    #Count proxy cues at current position
+    #Count goal trace blobs at current position
     inside_blobs <- sapply(1:num_blobs, function(i) {
       point_in_polygon(current_x, current_y, blobs[[i]])
     })
     inside_blob_count <- sum(inside_blobs)
     
-    #Store cue encounters and calculate changes in environmental information
+    #Store trace encounters and calculate changes in environmental information
     gain <- (inside_blob_count - prev_cue)
     
     #Calculate combined gain and determine movement parameters
-    gain_comp <- gain #* V #+ gain_nf * Vnf    #Combined gain from all features
-    gain_f <- gain_function(abs(gain_comp))  #Transform gain for angle constraint
+    gain_comp <- gain #When integration does not apply (like here), the value simplifies to 'gain'
+    gain_f <- gain_function(abs(gain_comp)) #Transform gain for angle constraint
     
     #Determine affective state based on gain
     aff <- if (gain_comp < 0) pi else 0      #pi = avoid, 0 = approach
@@ -192,7 +207,7 @@ for (i in 1:loops) {
     #Update movement angle based on gain and affective state
     angle <- angle + runif(1, -pi*(1-gain_f)+aff, pi*(1-gain_f)+aff)
     
-    #Calculate step length based on information gain
+    #Calculate step length based on unsigned gain
     length <- initial_step_length + log10(initial_step_length+(gain_f/0.1))
     
     #Calculate next position
@@ -246,42 +261,44 @@ for (i in 1:loops) {
       acos(cos(angle))
     }
     
-    #Record current step data
-    new_step <- tibble(
-      step = nrow(steps) + 1,
-      x = current_x,
-      y = current_y,
-      length = length,
-      abs_angle = bound_angle * (180 / pi),
-      rel_angle = ifelse(nrow(steps) > 0, 
-                         bound_angle * (180 / pi) - steps$abs_angle[nrow(steps)], 
-                         NA),
-      collision = collision,
-      true_length = true_length,
-      true_angle = true_angle_ * (180 / pi),
-      true_angle_r = ifelse(nrow(steps) > 0, 
-                            (true_angle_ * (180 / pi)) - steps$true_angle[nrow(steps)], 
-                            NA),
-      trace = inside_blob_count,
-      gain_trace = gain,
-      aff = case_when(
-        aff == 0 ~ "app",
-        aff == pi ~ "av",
-        TRUE ~ as.character(aff)
-      ),
-      #Adaptive gain transformed into proportion of angle constraint
-      gain_trans = gain_f 
-    )
-    
-    #Update step record
-    steps <- bind_rows(steps, new_step)
+    if(i ==loops){
+      #Record step data only in the last episode to improve execution time
+      new_step <- tibble(
+        step = nrow(steps) + 1,
+        x = current_x,
+        y = current_y,
+        length = length,
+        abs_angle = bound_angle * (180 / pi),
+        rel_angle = ifelse(nrow(steps) > 0, 
+                           bound_angle * (180 / pi) - steps$abs_angle[nrow(steps)], 
+                           NA),
+        collision = collision,
+        true_length = true_length,
+        true_angle = true_angle_ * (180 / pi),
+        true_angle_r = ifelse(nrow(steps) > 0, 
+                              (true_angle_ * (180 / pi)) - steps$true_angle[nrow(steps)], 
+                              NA),
+        trace = inside_blob_count,
+        gain_trace = gain,
+        aff = case_when(
+          aff == 0 ~ "app",
+          aff == pi ~ "av",
+          TRUE ~ as.character(aff)
+        ),
+        #Adaptive gain transformed into proportion of angle constraint
+        gain_trans = gain_f 
+      )
+      
+      #Update step record
+      steps <- bind_rows(steps, new_step)
+    }
     
     #Update tracking variables for next iteration
     prev_cue <- inside_blob_count
   }
 
   #Store episode performance metric
-  steps_count_per_iteration[i] <- nrow(steps)
+  steps_count_per_iteration[i] <- k
 }
 
 #Adjust the outcome data frame to enhance readability and facilitate inspection
@@ -293,7 +310,7 @@ steps$gain_trans <- format(steps$gain_trans, scientific = FALSE)
 #Basic inspection of the output
 
 #Visualize the temporal progression of steps per episode, which should be
-#... fairly stationary
+#... fairly stationary (no learning)
 plot(steps_count_per_iteration, type = "l",
      main = "Progression Over Episodes",
      xlab = "Episode Number",
@@ -305,8 +322,8 @@ typical_performance <- median(steps_count_per_iteration)
 print(paste("Typical steps per episode:", typical_performance))
 
 #Find an episode that represents typical performance
-#We look for the episode with steps count closest to but lower than
-#...the median (507 steps) to illustrate a representative pattern
+#We look for the episode with steps count closest to but higher than
+#...the median to illustrate a representative pattern
 representative_episode <- which(steps_count_per_iteration == 
                                   min(steps_count_per_iteration[steps_count_per_iteration > typical_performance]))
 print(paste("Representative episode number:", representative_episode))
@@ -342,7 +359,7 @@ rep_episode_trace <- steps
 #Prepare data for plotting
 blob_plot_data <- do.call(rbind, lapply(1:num_blobs, function(i) {
   blob <- blobs[[i]]
-  blob$id <- num_blobs - i + 1  # Reverse the id numbering
+  blob$id <- num_blobs - i + 1  #Reverse the id numbering
   blob
 }))
 
