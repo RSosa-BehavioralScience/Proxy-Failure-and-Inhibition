@@ -114,7 +114,7 @@ point_in_polygon <- function(x, y, polygon) {
 
 #Main Simulation Loop ----
 steps_count_per_iteration <- vector()  #Store steps per episode
-loops <- 498                           #Number of episodes
+loops <- 500                           #Number of episodes
 
 #Progress bar setup
 pb <- txtProgressBar(min = 0,
