@@ -114,7 +114,7 @@ point_in_polygon <- function(x, y, polygon) {
 
 #Main Simulation Loop ----
 steps_count_per_iteration <- vector()  #Store steps per episode
-loops <- 995                          #Number of episodes
+loops <- 1000                          #Number of episodes
 
 #Learning parameters for goal proxy (recall that this cue appears both around the goal and at 
 #...misleading sites)
