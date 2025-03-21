@@ -112,7 +112,7 @@ point_in_polygon <- function(x, y, polygon) {
 
 #Main Simulation Loop ----
 steps_count_per_iteration <- vector()  #Store steps per episode
-loops <- 192                            #Number of episodes
+loops <- 200                            #Number of episodes
 
 #Learning parameters for goal cue
 PE <- 0                  #Prediction error
